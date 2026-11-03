@@ -256,6 +256,9 @@ kbd {
 .rec { position: absolute; inset: 0; z-index: 2; border-radius: inherit; background: var(--surface-2); display: flex; align-items: center; gap: 10px; padding: 0 16px; font-size: 13px; font-weight: 500; }
 .rec-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); animation: blink 1s infinite; }
 .rec-time { font-variant-numeric: tabular-nums; color: var(--text-2); }
+.rec.is-starting .rec-dot { background: var(--text-3); }
+.rec.is-starting .wave i { background: var(--text-3); animation-duration: 1.6s; }
+.rec.is-starting .rec-time { visibility: hidden; }
 .rec-hint { margin-left: auto; color: var(--text-3); font-size: 12px; font-weight: 400; }
 .wave { display: inline-flex; gap: 3px; align-items: center; height: 16px; }
 .wave i { width: 3px; height: 100%; background: var(--danger); border-radius: 2px; animation: wave 0.9s ease-in-out infinite; }

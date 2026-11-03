@@ -2,7 +2,12 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-const state = { project: null, busy: false, view: "edited", recorder: null, recTimer: null, chunks: [] };
+const state = {
+  project: null, busy: false, view: "edited",
+  // push-to-talk
+  recorder: null, recTimer: null, chunks: [], holding: false, recStarting: false,
+  recStartedAt: 0, stream: null, streamTimer: null,
+};
 
 // ------------------------------------------------------------------ icons (Lucide, MIT)
 const ICONS = {
@@ -77,7 +82,7 @@ async function api(path, opts = {}) {
 function toast(message, kind = "error") {
   const el = document.createElement("div");
   el.className = `toast ${kind}`;
-  el.innerHTML = `${icon(kind === "error" ? "alert" : "check")}<span></span>`;
+  el.innerHTML = `${icon({ error: "alert", success: "check", info: "mic" }[kind] || "alert")}<span></span>`;
   el.querySelector("span").textContent = message;
   $("toasts").appendChild(el);
   setTimeout(() => el.remove(), 6000);
@@ -406,36 +411,99 @@ prompt.addEventListener("keydown", (e) => {
 $("composer").onsubmit = (e) => { e.preventDefault(); sendCommand(prompt.value); };
 
 // ------------------------------------------------------------------ voice (hold to talk)
-async function startRecording() {
-  if (state.busy || state.recorder || !state.project) return;
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const rec = new MediaRecorder(stream);
-    state.chunks = [];
-    rec.ondataavailable = (e) => e.data.size && state.chunks.push(e.data);
-    rec.onstop = () => finishRecording(rec, stream);
-    rec.start();
-    state.recorder = rec;
-    const started = Date.now();
-    $("rec").hidden = false;
-    $("mic").classList.add("recording");
+// Hold Space (or the mic button), speak, release. The mic stream is kept warm for a
+// short while after use so the first words of the next command aren't clipped.
+const MIN_HOLD_MS = 450;
+
+async function getMicStream() {
+  clearTimeout(state.streamTimer);
+  if (state.stream && state.stream.getAudioTracks().some((t) => t.readyState === "live")) return state.stream;
+  state.stream = await navigator.mediaDevices.getUserMedia({
+    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+  });
+  return state.stream;
+}
+function releaseMicLater() {
+  clearTimeout(state.streamTimer);
+  state.streamTimer = setTimeout(() => {
+    if (state.recorder || !state.stream) return;
+    state.stream.getTracks().forEach((t) => t.stop());
+    state.stream = null;
+  }, 30000);
+}
+
+function showRecording(on, phase = "starting") {
+  $("rec").hidden = !on;
+  $("rec").classList.toggle("is-starting", phase === "starting");
+  $("rec-label").textContent = phase === "starting" ? "Starting mic…" : "Listening";
+  $("rec-hint").textContent = phase === "starting" ? "Wait a moment, then speak" : "Release to send";
+  $("mic").classList.toggle("recording", on);
+  clearInterval(state.recTimer);
+  if (on) {
     $("rec-time").textContent = "0:00";
+    const started = Date.now();
     state.recTimer = setInterval(() => ($("rec-time").textContent = fmtTime((Date.now() - started) / 1000)), 250);
-  } catch (err) {
-    toast(`Microphone unavailable: ${err.message}`);
   }
 }
+
+async function startRecording() {
+  if (state.busy || state.recorder || state.recStarting || !state.project) return;
+  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+    toast("Voice input isn't supported in this browser. Type your edit instead.");
+    return;
+  }
+  state.holding = true;
+  state.recStarting = true;
+  showRecording(true); // instant feedback while the mic spins up
+  let stream;
+  try {
+    stream = await getMicStream();
+  } catch (err) {
+    state.recStarting = false;
+    state.holding = false;
+    showRecording(false);
+    toast(err.name === "NotAllowedError" ? "Microphone access was blocked. Allow it in your browser's site settings." : `Microphone unavailable: ${err.message}`);
+    return;
+  }
+  state.recStarting = false;
+  if (!state.holding) {
+    // Released before the mic was ready (e.g. while the permission prompt was open).
+    showRecording(false);
+    releaseMicLater();
+    toast("Mic ready. Hold Space (or the mic button) while you speak, then release.", "info");
+    return;
+  }
+  const rec = new MediaRecorder(stream);
+  state.chunks = [];
+  rec.ondataavailable = (e) => e.data.size && state.chunks.push(e.data);
+  rec.onstop = () => finishRecording(rec);
+  rec.start();
+  state.recorder = rec;
+  state.recStartedAt = Date.now();
+  $("rec").classList.remove("is-starting");
+  $("rec-label").textContent = "Listening";
+  $("rec-hint").textContent = "Release to send";
+  $("rec-time").textContent = "0:00";
+  clearInterval(state.recTimer);
+  state.recTimer = setInterval(() => ($("rec-time").textContent = fmtTime((Date.now() - state.recStartedAt) / 1000)), 250);
+}
+
 function stopRecording() {
+  state.holding = false;
   if (state.recorder && state.recorder.state === "recording") state.recorder.stop();
 }
-async function finishRecording(rec, stream) {
-  stream.getTracks().forEach((t) => t.stop());
-  clearInterval(state.recTimer);
+
+async function finishRecording(rec) {
+  const heldFor = Date.now() - state.recStartedAt;
   state.recorder = null;
-  $("rec").hidden = true;
-  $("mic").classList.remove("recording");
+  showRecording(false);
+  releaseMicLater();
   const blob = new Blob(state.chunks, { type: rec.mimeType || "audio/webm" });
-  if (blob.size < 2000) return;
+  if (heldFor < MIN_HOLD_MS || blob.size < 1500) {
+    toast("Keep holding while you speak, then release to send.", "info");
+    return;
+  }
+  const previous = prompt.placeholder;
   prompt.placeholder = "Transcribing with Muse Voice Transcribe…";
   try {
     const form = new FormData();
@@ -446,26 +514,55 @@ async function finishRecording(rec, stream) {
   } catch (err) {
     toast(`Voice failed: ${err.message}`);
   } finally {
-    prompt.placeholder = "Describe an edit…  e.g. make the dog glow pink";
+    prompt.placeholder = previous;
   }
 }
-$("mic").addEventListener("pointerdown", (e) => { e.preventDefault(); startRecording(); });
-$("mic").addEventListener("pointerup", stopRecording);
-$("mic").addEventListener("pointerleave", stopRecording);
+
+const mic = $("mic");
+mic.addEventListener("pointerdown", (e) => {
+  e.preventDefault();
+  mic.setPointerCapture?.(e.pointerId); // keep receiving pointerup even if the finger drifts off
+  startRecording();
+});
+mic.addEventListener("pointerup", stopRecording);
+mic.addEventListener("pointercancel", stopRecording);
+mic.addEventListener("contextmenu", (e) => e.preventDefault()); // long-press on mobile
 
 // ------------------------------------------------------------------ keyboard
-const typing = () => ["TEXTAREA", "INPUT"].includes(document.activeElement?.tagName);
+// Space is push-to-talk everywhere in the editor, except while typing an actual
+// sentence in a text field (an empty composer still counts as "not typing").
+function spaceIsTalk() {
+  const el = document.activeElement;
+  if (el === prompt) return prompt.value.trim() === "";
+  if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return false;
+  return true;
+}
+const voiceActive = () => state.holding || state.recStarting || !!state.recorder;
+
 document.addEventListener("keydown", (e) => {
-  if (!state.project || $("editor").hidden) return;
-  if (e.code === "Space" && !e.repeat && !typing() && document.activeElement?.tagName !== "VIDEO") {
-    e.preventDefault(); startRecording();
-  } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z" && !typing()) {
+  if (!state.project || $("editor").hidden || $("cover-dialog").open) return;
+  if (e.code === "Space") {
+    if (voiceActive()) { e.preventDefault(); return; } // swallow auto-repeat
+    if (!spaceIsTalk() || e.metaKey || e.ctrlKey || e.altKey) return;
+    e.preventDefault(); // no scrolling, no stray space, no play/pause, no button press
+    if (!e.repeat) startRecording();
+    return;
+  }
+  const typing = ["TEXTAREA", "INPUT"].includes(document.activeElement?.tagName);
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z" && !typing) {
     e.preventDefault(); undo();
-  } else if (e.key === "/" && !typing()) {
+  } else if (e.key === "/" && !typing) {
     e.preventDefault(); prompt.focus();
   }
 });
-document.addEventListener("keyup", (e) => { if (e.code === "Space") stopRecording(); });
+document.addEventListener("keyup", (e) => {
+  if (e.code !== "Space" || !voiceActive()) return;
+  e.preventDefault(); // a focused button would otherwise "click" on Space release
+  stopRecording();
+});
+// Never get stuck recording if the key-up happens outside the page.
+window.addEventListener("blur", () => voiceActive() && stopRecording());
+document.addEventListener("visibilitychange", () => document.hidden && voiceActive() && stopRecording());
 
 // ------------------------------------------------------------------ upload wiring
 $("file").onchange = (e) => upload(e.target.files[0]);
