@@ -177,10 +177,10 @@ class Project:
     def likely_targets(self) -> list[str]:
         subjects = [s.strip().lower() for s in (self.meta.get("analysis") or {}).get("subjects", [])]
         picks: list[str] = []
-        for concept in ["person", *subjects[:2]]:
+        for concept in ["person", "face", *subjects[:2]]:
             if concept and concept not in picks and len(concept.split()) <= 3:
                 picks.append(concept)
-        return picks[:3]
+        return picks[:4]
 
     # ------------------------------------------------------------------ commands
     def context(self) -> dict[str, Any]:
