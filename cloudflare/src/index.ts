@@ -41,25 +41,56 @@ const MODELS = {
 
 const container = (env: Env) => getContainer(env.SAYCUT, "main");
 
+const CACHE_VERSION = "2";
+
+// Serve a byte range from a full 200 response (Safari/iOS require 206 for <video>).
+async function withRange(full: Response, range: string | null): Promise<Response> {
+  const headers = new Headers(full.headers);
+  headers.set("accept-ranges", "bytes");
+  const match = range && /^bytes=(\d*)-(\d*)$/.exec(range.trim());
+  if (full.status !== 200 || !match || (!match[1] && !match[2])) {
+    return new Response(full.body, { status: full.status, headers });
+  }
+  const body = await full.arrayBuffer();
+  const size = body.byteLength;
+  let start: number, end: number;
+  if (match[1]) {
+    start = Number(match[1]);
+    end = match[2] ? Math.min(Number(match[2]), size - 1) : size - 1;
+  } else {
+    start = Math.max(0, size - Number(match[2]));
+    end = size - 1;
+  }
+  if (start >= size || start > end) {
+    headers.set("content-range", `bytes */${size}`);
+    return new Response(null, { status: 416, headers });
+  }
+  headers.set("content-range", `bytes ${start}-${end}/${size}`);
+  headers.set("content-length", String(end - start + 1));
+  return new Response(body.slice(start, end + 1), { status: 206, headers });
+}
+
 async function cachedMedia(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const url = new URL(request.url);
   url.search = "";
+  const origin = url.toString();
+  url.searchParams.set("cv", CACHE_VERSION);
   const key = new Request(url.toString(), { method: "GET" });
   const range = request.headers.get("range");
-  // Cache API answers Range requests with 206 from a stored full response.
-  const lookup = range ? new Request(url.toString(), { headers: { range } }) : key;
 
-  const hit = await caches.default.match(lookup);
-  if (hit) return hit;
+  const hit = await caches.default.match(range ? new Request(key.url, { headers: { range } }) : key);
+  if (hit) return hit.status === 206 ? hit : withRange(hit, range);
 
-  // Miss: fetch the whole file once (no Range), store it, then serve from cache.
-  const full = await container(env).fetch(key);
+  // Miss: fetch the whole file once (no Range), buffer it so it carries a
+  // Content-Length (needed for cached Range support), store it, then serve.
+  const full = await container(env).fetch(new Request(origin, { method: "GET" }));
   if (full.status !== 200 || !full.headers.get("cache-control")?.includes("immutable")) return full;
-  await caches.default.put(key, full);
-  const stored = await caches.default.match(lookup);
-  if (stored) return stored;
-  // Cache unavailable (e.g. workers.dev): fall back to proxying.
-  return container(env).fetch(new Request(url.toString(), { headers: request.headers }));
+  const body = await full.arrayBuffer();
+  const headers = new Headers(full.headers);
+  headers.set("content-length", String(body.byteLength));
+  headers.set("accept-ranges", "bytes");
+  ctx.waitUntil(caches.default.put(key, new Response(body, { status: 200, headers })));
+  return withRange(new Response(body, { status: 200, headers }), range);
 }
 
 function wakingUp(isApi: boolean): Response {
