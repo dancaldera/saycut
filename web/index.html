@@ -3,88 +3,184 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>SayCut: edit Reels by saying what you want</title>
+  <title>SayCut: AI video editor for Reels</title>
+  <meta name="description" content="Edit Reels by describing what you want. Built on Meta Muse Spark, SAM 3.1, Muse Image and Muse Voice Transcribe." />
+  <meta name="theme-color" content="#09090b" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/static/styles.css" />
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✂️</text></svg>" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230866ff'/%3E%3Cg fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='3.2'/%3E%3Ccircle cx='11' cy='21' r='3.2'/%3E%3Cpath d='M13.4 13.4 23 23M23 9l-9.6 9.6'/%3E%3C/g%3E%3C/svg%3E" />
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">
-      <span class="logo">✂️</span>
-      <div>
-        <h1>SayCut</h1>
-        <p>Edit Reels by saying what you want</p>
-      </div>
-    </div>
-    <div class="models">
-      <span class="chip m-spark">Muse Spark</span>
-      <span class="chip m-sam">SAM 3.1</span>
-      <span class="chip m-image">Muse Image</span>
-      <span class="chip m-voice">Voice Transcribe</span>
+  <header class="nav">
+    <a class="brand" href="/" id="home-link" aria-label="SayCut home">
+      <span class="brand-mark"><i data-icon="scissors"></i></span>
+      <span class="brand-name">SayCut</span>
+      <span class="brand-sep"></span>
+      <span class="brand-tag">AI video editor</span>
+    </a>
+    <div class="nav-right">
+      <ul class="model-list" aria-label="Models">
+        <li><span class="dot spark"></span>Muse Spark</li>
+        <li><span class="dot sam"></span>SAM 3.1</li>
+        <li><span class="dot image"></span>Muse Image</li>
+        <li><span class="dot voice"></span>Voice Transcribe</li>
+      </ul>
+      <a class="btn btn-ghost btn-sm" href="https://github.com/dancaldera/saycut" target="_blank" rel="noopener">
+        <i data-icon="github"></i><span>GitHub</span>
+      </a>
     </div>
   </header>
 
-  <main id="app">
-    <!-- Upload state -->
-    <section id="upload" class="upload">
-      <label id="dropzone" class="dropzone">
-        <input id="file" type="file" accept="video/*" hidden />
-        <div class="drop-icon">🎬</div>
-        <h2>Drop a clip to start</h2>
-        <p>MP4 or MOV · up to 60 seconds · vertical works best</p>
-        <span class="btn primary">Choose video</span>
+  <!-- ============================================================ Landing / upload -->
+  <main id="upload" class="landing">
+    <section class="hero">
+      <span class="eyebrow"><i data-icon="sparkles"></i>Built with Meta Muse Spark &amp; SAM 3.1</span>
+      <h1>Edit video by describing it.</h1>
+      <p class="lede">Blur bystanders, light up your subject, swap the scene, add captions. SayCut tracks every object in every frame, so you only have to say what you want.</p>
+
+      <label id="dropzone" class="dropzone" tabindex="0">
+        <input id="file" type="file" accept="video/mp4,video/quicktime,video/*" hidden />
+        <div class="dz-idle">
+          <span class="dz-icon"><i data-icon="upload"></i></span>
+          <div class="dz-text">
+            <strong>Drop a video here, or <u>browse</u></strong>
+            <span>MP4 or MOV · up to 60 seconds · vertical works best</span>
+          </div>
+        </div>
+        <div class="dz-progress" hidden>
+          <div class="dz-progress-head"><span id="dz-label">Uploading…</span><span id="dz-pct">0%</span></div>
+          <div class="progress"><div id="dz-bar"></div></div>
+        </div>
       </label>
-      <ul class="examples">
-        <li>“Blur every face except mine”</li>
-        <li>“Make the dog glow pink”</li>
-        <li>“Put me on a beach at sunset”</li>
-        <li>“Remove the guy in the background”</li>
-        <li>“Add captions”</li>
-      </ul>
-      <p id="key-warning" class="warning" hidden>MODEL_API_KEY is missing. Add it to <code>.env</code> and restart.</p>
+      <p id="key-warning" class="warning" hidden><i data-icon="alert"></i>MODEL_API_KEY is missing on the server. Add it to <code>.env</code> and restart.</p>
     </section>
 
-    <!-- Editor state -->
-    <section id="editor" class="editor" hidden>
-      <div class="stage">
-        <div class="phone">
-          <div id="backdrop" class="backdrop"></div>
-          <video id="video" class="video" playsinline loop controls></video>
-          <img id="cover" class="cover" alt="Reels cover" hidden />
-          <div id="busy-overlay" class="busy-overlay" hidden>
-            <div class="spinner"></div>
-            <div id="busy-text">Working…</div>
-            <div class="bar"><div id="busy-bar"></div></div>
-          </div>
-          <div id="badge" class="badge" hidden>EDITED</div>
-        </div>
-        <div class="stage-actions">
-          <button id="compare" class="btn ghost" title="Hold to see the original">👁 Hold for original</button>
-          <button id="cover-btn" class="btn ghost">🖼 Make cover</button>
-          <a id="download" class="btn ghost" download hidden>⬇ Download</a>
-          <button id="new-btn" class="btn ghost">＋ New clip</button>
-        </div>
-      </div>
+    <section class="features" aria-label="What you can do">
+      <article class="feature">
+        <span class="feature-icon"><i data-icon="shield"></i></span>
+        <h3>Privacy in one sentence</h3>
+        <p>Blur, pixelate or emoji-cover faces, everyone or everyone except you.</p>
+        <code>“Blur every face except mine”</code>
+      </article>
+      <article class="feature">
+        <span class="feature-icon"><i data-icon="sun"></i></span>
+        <h3>Subject effects</h3>
+        <p>Neon glow, color pop and spotlight that follow your subject frame by frame.</p>
+        <code>“Make the dog glow pink”</code>
+      </article>
+      <article class="feature">
+        <span class="feature-icon"><i data-icon="mountain"></i></span>
+        <h3>New scenes</h3>
+        <p>Replace the background with a generated scene, or erase objects entirely.</p>
+        <code>“Put me on a beach at sunset”</code>
+      </article>
+      <article class="feature">
+        <span class="feature-icon"><i data-icon="captions"></i></span>
+        <h3>Captions &amp; cover</h3>
+        <p>Burned-in captions from your speech and a designed Reels cover in one click.</p>
+        <code>“Add captions”</code>
+      </article>
+    </section>
 
-      <div class="panel">
-        <div id="summary" class="summary"></div>
-        <div id="chat" class="chat"></div>
-        <div id="suggestions" class="suggestions"></div>
-
-        <form id="composer" class="composer">
-          <button type="button" id="mic" class="mic" title="Hold to talk (or press and hold Space)">🎙</button>
-          <input id="prompt" type="text" autocomplete="off" placeholder="Say or type an edit… e.g. “make me glow blue”" />
-          <button type="submit" id="send" class="btn primary">Edit</button>
-        </form>
-
-        <div class="edits-head">
-          <h3>Edits</h3>
-          <button id="undo" class="btn tiny">↶ Undo</button>
-        </div>
-        <ul id="edits" class="edits"></ul>
-      </div>
+    <section class="how" aria-label="How it works">
+      <div class="how-step"><span class="step-n">1</span><div><strong>Upload</strong><span>Muse Spark watches the clip and suggests edits.</span></div></div>
+      <div class="how-step"><span class="step-n">2</span><div><strong>Describe</strong><span>Type or hold Space and speak. Muse Spark plans the edit.</span></div></div>
+      <div class="how-step"><span class="step-n">3</span><div><strong>Track</strong><span>SAM 3.1 segments and follows each object across frames.</span></div></div>
+      <div class="how-step"><span class="step-n">4</span><div><strong>Export</strong><span>Frame-accurate render with original audio, ready to post.</span></div></div>
     </section>
   </main>
+
+  <!-- ============================================================ Editor -->
+  <main id="editor" class="workspace" hidden>
+    <section class="canvas">
+      <div class="toolbar">
+        <div class="project-meta">
+          <i data-icon="film"></i>
+          <span id="meta-name" class="meta-name">clip.mp4</span>
+          <span id="meta-specs" class="meta-specs"></span>
+        </div>
+        <div class="toolbar-actions">
+          <div class="segmented" role="tablist" aria-label="Preview">
+            <button id="view-original" role="tab" aria-selected="false">Original</button>
+            <button id="view-edited" role="tab" aria-selected="true">Edited</button>
+          </div>
+          <button id="cover-btn" class="btn btn-secondary btn-sm"><i data-icon="image"></i><span>Cover</span></button>
+          <a id="download" class="btn btn-primary btn-sm is-disabled" aria-disabled="true"><i data-icon="download"></i><span>Export</span></a>
+        </div>
+      </div>
+
+      <div id="stage" class="stage">
+        <div id="backdrop" class="backdrop"></div>
+        <div id="frame" class="frame">
+          <video id="video" playsinline loop controls preload="auto"></video>
+          <div id="frame-progress" class="frame-progress" hidden><div id="frame-progress-bar"></div></div>
+        </div>
+        <div id="status" class="status" hidden>
+          <span class="spinner"></span>
+          <span id="status-model" class="status-model"></span>
+          <span id="status-text" class="status-text">Working…</span>
+        </div>
+      </div>
+
+      <div class="layers">
+        <div class="layers-head">
+          <span class="layers-title"><i data-icon="layers"></i>Edits <span id="edit-count" class="count">0</span></span>
+          <button id="undo" class="btn btn-ghost btn-xs" title="Undo (⌘Z)"><i data-icon="undo"></i><span>Undo</span></button>
+        </div>
+        <ul id="edits" class="layer-list"></ul>
+      </div>
+    </section>
+
+    <aside class="inspector">
+      <div class="panel-head">
+        <span class="panel-title"><i data-icon="sparkles"></i>Assistant</span>
+        <button id="new-btn" class="btn btn-ghost btn-xs" title="Start a new project"><i data-icon="plus"></i><span>New</span></button>
+      </div>
+
+      <div id="insight" class="insight">
+        <span class="insight-label">Muse Spark · clip analysis</span>
+        <strong id="insight-title" class="skeleton">&nbsp;</strong>
+        <p id="insight-summary" class="skeleton">&nbsp;</p>
+      </div>
+
+      <div id="chat" class="chat" aria-live="polite"></div>
+
+      <div class="suggest-wrap">
+        <span class="suggest-label">Suggestions</span>
+        <div id="suggestions" class="suggestions"></div>
+      </div>
+
+      <form id="composer" class="composer">
+        <div id="rec" class="rec" hidden>
+          <span class="rec-dot"></span><span>Listening</span><span id="rec-time" class="rec-time">0:00</span>
+          <span class="wave"><i></i><i></i><i></i><i></i><i></i></span>
+          <span class="rec-hint">Release to send</span>
+        </div>
+        <textarea id="prompt" rows="1" placeholder="Describe an edit…  e.g. make the dog glow pink" aria-label="Describe an edit"></textarea>
+        <div class="composer-row">
+          <button type="button" id="mic" class="icon-btn" title="Hold to talk (or hold Space)" aria-label="Hold to talk"><i data-icon="mic"></i></button>
+          <span class="composer-hint"><kbd>Space</kbd> hold to talk · <kbd>⏎</kbd> send</span>
+          <button type="submit" id="send" class="icon-btn icon-btn-primary" aria-label="Send" disabled><i data-icon="arrow-up"></i></button>
+        </div>
+      </form>
+    </aside>
+  </main>
+
+  <dialog id="cover-dialog" class="dialog">
+    <div class="dialog-head">
+      <strong>Reels cover</strong>
+      <button class="icon-btn" id="cover-close" aria-label="Close"><i data-icon="x"></i></button>
+    </div>
+    <img id="cover-img" alt="Generated Reels cover" />
+    <div class="dialog-foot">
+      <span class="muted">Designed by Muse Image from the current frame</span>
+      <a id="cover-download" class="btn btn-primary btn-sm" download><i data-icon="download"></i><span>Download</span></a>
+    </div>
+  </dialog>
+
+  <div id="toasts" class="toasts" aria-live="assertive"></div>
 
   <script src="/static/app.js"></script>
 </body>
