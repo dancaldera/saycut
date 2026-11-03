@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SayCut: edit Reels by saying what you want</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✂️</text></svg>" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">✂️</span>
+      <div>
+        <h1>SayCut</h1>
+        <p>Edit Reels by saying what you want</p>
+      </div>
+    </div>
+    <div class="models">
+      <span class="chip m-spark">Muse Spark</span>
+      <span class="chip m-sam">SAM 3.1</span>
+      <span class="chip m-image">Muse Image</span>
+      <span class="chip m-voice">Voice Transcribe</span>
+    </div>
+  </header>
+
+  <main id="app">
+    <!-- Upload state -->
+    <section id="upload" class="upload">
+      <label id="dropzone" class="dropzone">
+        <input id="file" type="file" accept="video/*" hidden />
+        <div class="drop-icon">🎬</div>
+        <h2>Drop a clip to start</h2>
+        <p>MP4 or MOV · up to 60 seconds · vertical works best</p>
+        <span class="btn primary">Choose video</span>
+      </label>
+      <ul class="examples">
+        <li>“Blur every face except mine”</li>
+        <li>“Make the dog glow pink”</li>
+        <li>“Put me on a beach at sunset”</li>
+        <li>“Remove the guy in the background”</li>
+        <li>“Add captions”</li>
+      </ul>
+      <p id="key-warning" class="warning" hidden>MODEL_API_KEY is missing. Add it to <code>.env</code> and restart.</p>
+    </section>
+
+    <!-- Editor state -->
+    <section id="editor" class="editor" hidden>
+      <div class="stage">
+        <div class="phone">
+          <video id="bgvideo" class="bgvideo" muted playsinline loop></video>
+          <video id="video" class="video" playsinline loop controls></video>
+          <img id="cover" class="cover" alt="Reels cover" hidden />
+          <div id="busy-overlay" class="busy-overlay" hidden>
+            <div class="spinner"></div>
+            <div id="busy-text">Working…</div>
+            <div class="bar"><div id="busy-bar"></div></div>
+          </div>
+          <div id="badge" class="badge" hidden>EDITED</div>
+        </div>
+        <div class="stage-actions">
+          <button id="compare" class="btn ghost" title="Hold to see the original">👁 Hold for original</button>
+          <button id="cover-btn" class="btn ghost">🖼 Make cover</button>
+          <a id="download" class="btn ghost" download hidden>⬇ Download</a>
+          <button id="new-btn" class="btn ghost">＋ New clip</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div id="summary" class="summary"></div>
+        <div id="chat" class="chat"></div>
+        <div id="suggestions" class="suggestions"></div>
+
+        <form id="composer" class="composer">
+          <button type="button" id="mic" class="mic" title="Hold to talk (or press and hold Space)">🎙</button>
+          <input id="prompt" type="text" autocomplete="off" placeholder="Say or type an edit… e.g. “make me glow blue”" />
+          <button type="submit" id="send" class="btn primary">Edit</button>
+        </form>
+
+        <div class="edits-head">
+          <h3>Edits</h3>
+          <button id="undo" class="btn tiny">↶ Undo</button>
+        </div>
+        <ul id="edits" class="edits"></ul>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
