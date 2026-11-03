@@ -1,0 +1,8 @@
+.env
+.venv
+data
+**/node_modules
+**/__pycache__
+.git
+cloudflare
+*.md

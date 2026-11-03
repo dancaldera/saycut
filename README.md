@@ -3,6 +3,8 @@
 > “Blur every face except mine.” “Make the dog glow pink.” “Put me on a beach at sunset.”
 > SayCut turns a sentence (typed or spoken) into a frame-accurate video edit.
 
+**Live demo: [saycut.softmelody.dev](https://saycut.softmelody.dev)**
+
 Built for the **Meta Global AI Developer Hackathon** with four Meta models working together:
 
 | Model | What it does in SayCut |
@@ -73,6 +75,30 @@ Configuration (environment variables):
 | `SAYCUT_MAX_SECONDS` | `60` | Input is trimmed to this length |
 | `SAYCUT_MAX_LONG_SIDE` | `1280` | Input is downscaled to this size for fast renders |
 
+## Deploy (Cloudflare Containers)
+
+The hosted demo runs on **Cloudflare Containers**. A Worker on the custom domain routes every request to one container instance running this repo's `Dockerfile` (Python, ffmpeg, OpenCV, Node).
+
+```bash
+cd cloudflare && npm install
+npx wrangler deploy                    # builds the linux/amd64 image with Docker and pushes it
+npx wrangler secret put MODEL_API_KEY  # handed to the container as an env var
+```
+
+The container image also runs anywhere Docker does:
+
+```bash
+docker build -t saycut . && docker run -p 8000:8000 -e MODEL_API_KEY=... saycut
+```
+
+When `SAYCUT_PUBLIC=1` (set in the image), usage guardrails turn on because the demo spends a single API key:
+- per-IP limits on uploads, edits, and voice commands
+- a global daily upload cap
+- a 150 MB upload limit
+- projects deleted after 24 hours
+
+Tune these with `SAYCUT_UPLOADS_PER_HOUR`, `SAYCUT_EDITS_PER_HOUR`, `SAYCUT_UPLOADS_PER_DAY`, and `SAYCUT_PROJECT_TTL_HOURS`.
+
 ## Project layout
 
 ```
@@ -87,6 +113,8 @@ app/
 decoder/
   decode.mjs    fast mask decoding with @meta-sam/parser
 web/            single-page UI (no build step)
+cloudflare/     Worker + wrangler config for Cloudflare Containers
+Dockerfile      container image (linux/amd64)
 ```
 
 ## Cost

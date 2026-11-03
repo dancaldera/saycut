@@ -1,0 +1,23 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "saycut",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-01",
+  "observability": { "enabled": true },
+  "routes": [{ "pattern": "saycut.softmelody.dev", "custom_domain": true }],
+  "containers": [
+    {
+      "class_name": "SayCutContainer",
+      "image": "../Dockerfile",
+      "image_build_context": "..",
+      "instance_type": "standard-3",
+      "max_instances": 1
+    }
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "SAYCUT", "class_name": "SayCutContainer" }]
+  },
+  "exports": {
+    "SayCutContainer": { "type": "durable-object", "storage": "sqlite" }
+  }
+}
