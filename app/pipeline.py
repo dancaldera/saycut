@@ -89,6 +89,10 @@ class Project:
             "concepts": {},
         }
         (pdir / "meta.json").write_text(json.dumps(meta, indent=2))
+        frame = media.read_frame(pdir / "source.mp4", min(info.frames - 1, int(info.fps))) if info.frames else None
+        if frame is not None:
+            small = cv2.resize(frame, (160, max(1, int(160 * info.height / info.width))), interpolation=cv2.INTER_AREA)
+            cv2.imwrite(str(pdir / "assets" / "poster.jpg"), small, [cv2.IMWRITE_JPEG_QUALITY, 70])
         return cls(pid)
 
     def save(self) -> None:
@@ -116,6 +120,7 @@ class Project:
             "source_url": f"/media/{self.id}/source.mp4",
             "render_url": f"/media/{self.id}/renders/{m['render']}" if m.get("render") else None,
             "cover_url": f"/media/{self.id}/assets/{m['cover']}" if m.get("cover") else None,
+            "poster_url": f"/media/{self.id}/assets/poster.jpg" if (self.dir / "assets" / "poster.jpg").exists() else None,
             "ready": bool(m.get("file_id")),
         }
 

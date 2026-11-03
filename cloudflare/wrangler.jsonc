@@ -5,12 +5,15 @@
   "compatibility_date": "2026-11-01",
   "observability": { "enabled": true },
   "routes": [{ "pattern": "saycut.softmelody.dev", "custom_domain": true }],
+  // UI files are served as free static assets; the Worker only runs for /api and /media.
+  "assets": { "directory": "../web" },
   "containers": [
     {
       "class_name": "SayCutContainer",
       "image": "../Dockerfile",
       "image_build_context": "..",
-      "instance_type": "standard-3",
+      // 2 vCPU for fast renders, but only 6 GiB reserved (memory is billed while awake).
+      "instance_type": { "vcpu": 2, "memory_mib": 6144, "disk_mb": 12000 },
       "max_instances": 1
     }
   ],

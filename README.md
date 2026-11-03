@@ -91,6 +91,12 @@ The container image also runs anywhere Docker does:
 docker build -t saycut . && docker run -p 8000:8000 -e MODEL_API_KEY=... saycut
 ```
 
+The Worker is built to keep the container asleep whenever possible, because the container is billed for every second it's awake:
+- The UI (`web/`) is served as **Workers Static Assets**, which are free and never invoke the Worker or wake the container. `/api/health` is answered at the edge.
+- `/media/*` files have immutable names (versioned renders, hashed assets), so they're **cached at the edge** through the Cache API, including video Range requests. Replays and before/after toggles never reach the container.
+- The container sleeps after **8 idle minutes**. Job polling (every 1.5 s) keeps it awake during edits.
+- It runs on a custom **2 vCPU / 6 GiB** instance: fast renders without paying for unused memory.
+
 When `SAYCUT_PUBLIC=1` (set in the image), usage guardrails turn on because the demo spends a single API key:
 - per-IP limits on uploads, edits, and voice commands
 - a global daily upload cap
@@ -112,7 +118,7 @@ app/
   media.py      ffmpeg normalisation + frame I/O
 decoder/
   decode.mjs    fast mask decoding with @meta-sam/parser
-web/            single-page UI (no build step)
+web/            single-page UI (no build step), served as static assets
 cloudflare/     Worker + wrangler config for Cloudflare Containers
 Dockerfile      container image (linux/amd64)
 ```

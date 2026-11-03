@@ -62,7 +62,7 @@ async function runJob(jobId, bubble) {
       if (bubble) renderTrace(bubble, job.steps, job.status === "running");
       if (job.status === "done") return job.result;
       if (job.status === "error") throw new Error(job.error);
-      await new Promise((r) => setTimeout(r, 500));
+      await new Promise((r) => setTimeout(r, 1500));
     }
   } finally {
     setBusy(false);
@@ -82,19 +82,19 @@ function showProject(p, { keepTime = false } = {}) {
   $("upload").hidden = true;
   $("editor").hidden = false;
 
-  const url = (p.render_url || p.source_url) + `?v=${Date.now()}`;
+  // Media URLs are immutable (versioned renders), so no cache-busting: replays and
+  // before/after toggles come from the browser cache instead of the server.
+  const url = p.render_url || p.source_url;
   const video = $("video");
   const t = keepTime ? video.currentTime : 0;
-  if (!video.src.includes(p.render_url || p.source_url) || keepTime) {
+  if (!video.src.endsWith(url)) {
     video.src = url;
-    $("bgvideo").src = url;
     video.addEventListener("loadedmetadata", () => {
       video.currentTime = Math.min(t, video.duration || t);
-      $("bgvideo").currentTime = video.currentTime;
       video.play().catch(() => {});
-      $("bgvideo").play().catch(() => {});
     }, { once: true });
   }
+  $("backdrop").style.backgroundImage = p.poster_url ? `url("${p.poster_url}")` : "";
   $("badge").hidden = !p.render_url;
   $("badge").textContent = "EDITED";
   $("badge").classList.remove("original");
@@ -209,7 +209,7 @@ $("cover-btn").onclick = async () => {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ time }),
   }, "Designing a cover from this frame…");
   if (result?.project?.cover_url) {
-    $("cover").src = result.project.cover_url + `?v=${Date.now()}`;
+    $("cover").src = result.project.cover_url;
     $("cover").hidden = false;
     addMsg("ai", "Tap the cover to go back to the video. Right-click → save to download it.");
   }
@@ -222,7 +222,7 @@ $("new-btn").onclick = () => {
   $("editor").hidden = true;
   $("upload").hidden = false;
   $("video").removeAttribute("src");
-  $("bgvideo").removeAttribute("src");
+  $("backdrop").style.backgroundImage = "";
 };
 
 $("composer").onsubmit = (e) => { e.preventDefault(); sendCommand($("prompt").value); };
@@ -235,7 +235,7 @@ function showOriginal(on) {
   if (!p || !p.render_url) return;
   const v = $("video");
   compareTime = v.currentTime;
-  const src = (on ? p.source_url : p.render_url) + `?v=${on ? "o" : Date.now()}`;
+  const src = on ? p.source_url : p.render_url;
   v.src = src;
   v.addEventListener("loadedmetadata", () => { v.currentTime = compareTime; v.play().catch(() => {}); }, { once: true });
   $("badge").textContent = on ? "ORIGINAL" : "EDITED";
@@ -245,10 +245,6 @@ compare.addEventListener("pointerdown", () => showOriginal(true));
 compare.addEventListener("pointerup", () => showOriginal(false));
 compare.addEventListener("pointerleave", (e) => { if (e.buttons) showOriginal(false); });
 
-// Keep the blurred backdrop in sync with the main video.
-$("video").addEventListener("play", () => $("bgvideo").play().catch(() => {}));
-$("video").addEventListener("pause", () => $("bgvideo").pause());
-$("video").addEventListener("seeked", () => ($("bgvideo").currentTime = $("video").currentTime));
 
 // ------------------------------------------------------------------ voice (hold to talk)
 async function startRecording() {

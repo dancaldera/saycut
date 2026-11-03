@@ -243,7 +243,9 @@ def media_file(pid: str, path: str) -> FileResponse:
     target = (project.dir / path).resolve()
     if project.dir.resolve() not in target.parents or not target.is_file() or target.name == "meta.json":
         raise HTTPException(404)
-    return FileResponse(target, headers={"Cache-Control": "no-cache"})
+    # Every media file name is unique per content (versioned renders, hashed assets,
+    # random project ids), so browsers and the Cloudflare edge can cache it forever.
+    return FileResponse(target, headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
 
 @app.get("/")
@@ -251,4 +253,4 @@ def index() -> FileResponse:
     return FileResponse(config.WEB_DIR / "index.html")
 
 
-app.mount("/static", StaticFiles(directory=config.WEB_DIR), name="static")
+app.mount("/static", StaticFiles(directory=config.WEB_DIR / "static"), name="static")
