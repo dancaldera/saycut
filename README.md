@@ -11,7 +11,7 @@ Built for the **Meta Global AI Developer Hackathon** with four Meta models worki
 |---|---|
 | **Muse Spark 1.3** | Watches the uploaded clip (video understanding) and suggests edits for that clip. Turns each command into a structured edit plan (JSON schema). Looks at tracked objects to work out *which* person you mean (“the girl in the green shirt”, “everyone except me”). |
 | **SAM 3.1** | Segments and **tracks** the target through the whole video from a text prompt (“face”, “dog”, “person”), giving pixel masks with stable object IDs across frames. |
-| **Muse Image** | Paints new backgrounds (“put me on the moon”) and designs a scroll-stopping Reels cover from any frame. |
+| **Muse Image** | **Restyles the whole video** (“make me an anime girl on a beach”, claymation, cyberpunk) one keyframe at a time, paints new backgrounds (“put me on the moon”) and designs a scroll-stopping Reels cover from any frame. |
 | **Muse Voice Transcribe** | Takes push-to-talk voice commands and burns in captions from the clip's own speech. |
 
 ## How it works
@@ -41,7 +41,17 @@ Built for the **Meta Global AI Developer Hackathon** with four Meta models worki
 - `background_replace`: Muse Image scene with the subject composited in
 - `remove`: erase an object (temporal clean plate + inpainting; best on tripod shots)
 - `captions`: Voice Transcribe turns, burned in Reels-style
+- `restyle`: turn the **whole clip** into a new look or world (anime, 3D cartoon, claymation, Van Gogh, cyberpunk, snow day, “turn us into robots”) with the original motion intact. See below.
 - **cover**: Muse Image redesigns the current frame into a 9:16 cover with a hook title
+
+**Restyle: a video-to-video model built from an image model.** The Model API has no video-to-video model, so SayCut composes one:
+1. Muse Spark writes a style prompt from the request (“anime illustration with clean cel shading; she is an anime girl on a sunny tropical beach”).
+2. Muse Image transforms the first frame. That frame becomes the **style anchor**.
+3. Keyframes about every 0.6 s are transformed **in parallel**, each with the anchor passed as a second reference image. Characters, palette and setting stay consistent across the clip, while pose and framing follow the real frame.
+4. Between keyframes, each stylised keyframe is **carried along the clip's real motion** with dense DIS optical flow. Coordinate maps are composed frame to frame, so each output pixel is resampled once. Frames are warped forward from the previous keyframe and backward from the next, then cross-faded through the middle of each interval. The output moves frame for frame like the original.
+5. Every other edit stacks on top. When a restyle is active, SAM 3.1 tracks objects **on the restyled video**, so “now make her glow pink” hugs the anime character. Swapping or undoing the restyle re-resolves those edits automatically.
+
+An 8-second clip takes about a minute (15 keyframes, roughly $0.15 of Muse Image).
 
 **Selection** is what makes this more than a filter app. SAM 3.1 gives every object a stable ID, so:
 - “everyone **except me**” → the main subject (picked by Muse Spark vision) is excluded from the effect
@@ -127,7 +137,7 @@ Dockerfile      container image (linux/amd64)
 
 On a 30-second, 30 fps clip, with prices from Meta's public pricing page:
 - SAM 3.1 at $0.20 per 1,000 frames ≈ **$0.18 per tracked concept**
-- Muse Image at $0.01 per image
+- Muse Image at $0.01 per image (a restyle uses one per keyframe, at most 28)
 - Muse Spark calls are a few thousand tokens each
 
 A full editing session typically costs well under $1.

@@ -20,7 +20,7 @@ from .tracks import Tracks
 
 EFFECTS = [
     "blur", "pixelate", "glow", "color_pop", "spotlight", "background_blur",
-    "background_replace", "remove", "emoji", "captions", "undo", "reset", "none",
+    "background_replace", "remove", "emoji", "captions", "restyle", "undo", "reset", "none",
 ]
 
 ANALYSIS_SCHEMA: dict[str, Any] = {
@@ -56,7 +56,7 @@ PLAN_SCHEMA: dict[str, Any] = {
                 "additionalProperties": False,
                 "required": [
                     "effect", "target", "selection", "description", "invert", "color",
-                    "intensity", "emoji", "background_prompt", "start_sec", "end_sec",
+                    "intensity", "emoji", "background_prompt", "style_prompt", "start_sec", "end_sec",
                 ],
                 "properties": {
                     "effect": {"type": "string", "enum": EFFECTS},
@@ -68,6 +68,7 @@ PLAN_SCHEMA: dict[str, Any] = {
                     "intensity": {"type": "number"},
                     "emoji": {"type": "string"},
                     "background_prompt": {"type": "string"},
+                    "style_prompt": {"type": "string"},
                     "start_sec": {"type": ["number", "null"]},
                     "end_sec": {"type": ["number", "null"]},
                 },
@@ -95,7 +96,16 @@ Effects (pick the closest; never invent new ones):
 - remove: erase the target from the video.
 - emoji: cover the target with an emoji (set `emoji` to one emoji character). Great for hiding faces playfully.
 - captions: burn in subtitles from the speech in the video (target "").
-- undo: remove the last edit. reset: remove all edits. none: when the request can't be done with these tools (explain in reply).
+- restyle: transform the WHOLE video into a new look or world while keeping its motion (target ""). Use it for art styles
+  (anime, cartoon, Pixar-style 3D, claymation, LEGO, comic book, watercolor, oil painting, Van Gogh, pixel art, pencil sketch,
+  vaporwave), whole-scene changes ("make it snow", "underwater", "cyberpunk city at night", "zombie apocalypse",
+  "on the moon") and turning people into characters ("make me an anime girl on a beach", "turn us into robots",
+  "make me a superhero"). Write a vivid `style_prompt`: the art style + the setting + any character changes, in one
+  sentence, describing what the WHOLE frame should become (e.g. "anime illustration with clean cel shading; she is an
+  anime girl on a sunny tropical beach with palm trees"). Prefer restyle over background_replace whenever the person
+  should change too, or the request is an art style / "crazy" transformation. Only one restyle is active at a time.
+- undo: remove the last edit. reset: remove all edits. none: only for requests that are not video edits at all.
+Never refuse a creative transformation: if no other effect fits, use restyle.
 
 Target rules (the target is sent to Segment Anything 3.1):
 - `target` is ONE short concrete noun phrase: "face", "person", "dog", "ball", "car", "laptop screen". No verbs, no "and", no lists, no negation, no positions.
@@ -115,7 +125,7 @@ def analyze_video(file_id: str) -> dict[str, Any]:
         "Return a one-sentence summary, a short hook title, the segmentable subjects you see, and 4 edit commands "
         "that would make this specific clip more engaging. Commands must use these tools: blur/pixelate/emoji over "
         "faces or objects, neon glow on a subject, colour pop, spotlight, portrait background blur, replace the "
-        "background with a new scene, remove an object, add captions. Keep each command under 9 words, "
+        "background with a new scene, remove an object, add captions, or restyle the whole video (anime, claymation, cyberpunk, a new world). Make the LAST suggestion a bold whole-video transformation. Keep each command under 9 words, "
         "phrased like a person talking, e.g. 'Make the dog glow pink'."
     )
     return meta_api.respond_json(

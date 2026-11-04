@@ -244,6 +244,18 @@ kbd {
 }
 .suggestions button:hover { border-color: var(--accent); color: var(--text); background: var(--accent-soft); }
 .suggestions button:disabled { opacity: .4; pointer-events: none; }
+.suggest-label-gap { margin-top: 12px; display: flex; align-items: center; gap: 6px; }
+.suggest-label-gap .i { width: 12px; height: 12px; }
+.styles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.styles button {
+  display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 8px 4px 7px; border-radius: 10px; cursor: pointer;
+  border: 1px solid var(--border-strong); color: var(--text-2); font-size: 11.5px; line-height: 1.2;
+  background: linear-gradient(160deg, rgba(8, 102, 255, .10), rgba(168, 85, 247, .08) 60%, var(--surface-2));
+  transition: border-color .15s, color .15s, transform .15s;
+}
+.styles button:hover { border-color: var(--accent); color: var(--text); transform: translateY(-1px); }
+.styles button:disabled { opacity: .4; pointer-events: none; }
+.style-emoji { font-size: 18px; line-height: 1; }
 
 .composer { margin: 0 16px 16px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--surface-2); transition: border-color .15s, box-shadow .15s; position: relative; flex: none; }
 .composer:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }

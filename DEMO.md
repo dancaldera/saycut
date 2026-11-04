@@ -21,19 +21,20 @@ Every beat below is aimed at one of them.
 | 1:15–1:40 | Type: “Make the dog glow pink.” Then: “Put me on a beach at sunset.” | “Edits stack. SAM tracks the dog. Muse Image paints a brand-new scene, and I'm composited into it.” |
 | 1:40–1:55 | Voice: “Add captions.” | “Captions come straight from Voice Transcribe.” |
 | 1:55–2:10 | Click **Make cover**. Show the Muse Image cover. | “And Muse Image designs a scroll-stopping cover from any frame.” |
-| 2:10–2:40 | Architecture diagram (from the README) with the 4 model logos. Flash the terminal showing tracked IDs. | “Under the hood: four Meta models in one agent loop. Speculative segmentation starts tracking likely subjects the moment you upload. Masks are decoded with Meta's SAM parser and rendered frame-accurately with the original audio.” |
-| 2:40–3:00 | Back to the final Reel, then the GitHub URL. | “SayCut. Edit Reels by saying what you want. It's open source. Link below.” |
+| 2:10–2:25 | Tap the **🌸 Anime** chip, or say: “Make me an anime girl on a beach.” Toggle Original/Edited. | “And if you want something crazier, SayCut restyles the whole video. Muse Image redraws keyframes, and optical flow animates them with my real motion.” |
+| 2:25–2:45 | Architecture diagram (from the README) with the 4 model logos. Flash the terminal showing tracked IDs. | “Under the hood: four Meta models in one agent loop. Speculative segmentation starts tracking likely subjects the moment you upload. Masks are decoded with Meta's SAM parser and rendered frame-accurately with the original audio.” |
+| 2:45–3:00 | Back to the final Reel, then the GitHub URL. | “SayCut. Edit Reels by saying what you want. It's open source. Link below.” |
 
 ## Submission form answers (draft)
 
-**One-liner**: SayCut is a voice-first video editor for Reels: say “blur everyone except me” or “put me on the moon” and it tracks, selects, and edits the right pixels in every frame.
+**One-liner**: SayCut is a voice-first video editor for Reels: say “blur everyone except me” or “make me an anime girl on a beach” and it tracks, selects, restyles and edits the right pixels in every frame.
 
 **Problem**: Privacy blurs, subject effects, background swaps, and captions are the edits creators want most. Today they need manual masking or rotoscoping in pro tools. Most creators skip them, or post bystanders' faces unblurred.
 
 **How it uses Meta's models**:
 - **Muse Spark 1.3** handles video understanding (suggestions), structured planning, and vision-based selection of the right tracked object.
 - **SAM 3.1** does text-prompted video segmentation and tracking with stable IDs.
-- **Muse Image** generates backgrounds and Reels covers.
+- **Muse Image** restyles the whole video (keyframes plus optical flow), generates backgrounds, and designs Reels covers.
 - **Muse Voice Transcribe** handles voice commands and burned-in captions.
 
 **Technical highlights**:
@@ -41,6 +42,7 @@ Every beat below is aimed at one of them.
 - Speculative background segmentation.
 - Cached raw SAM output, so re-renders cost nothing.
 - About 60× faster mask decoding via `@meta-sam/parser` in Node.
+- Whole-video restyle: a video-to-video effect built from an image model. Anchor-referenced parallel keyframes are animated with composed optical flow, and SAM 3.1 re-tracks objects on the restyled video so effects stack.
 - Temporal clean-plate object removal.
 - Edits that stack and can be undone, rendered with the original audio.
 

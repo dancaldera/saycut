@@ -21,17 +21,17 @@ from typing import Any, Callable
 import cv2
 import numpy as np
 
-from . import agent, config, effects, media, meta_api
+from . import agent, config, effects, media, meta_api, restyle
 from .tracks import Tracks, load_tracks
 
 Progress = Callable[[str, float | None], None]
 
 # Order in which effects are composited, regardless of the order they were asked for.
 STAGE = {
-    "remove": 0, "background_replace": 1, "background_blur": 2, "color_pop": 3, "spotlight": 4,
+    "restyle": -1, "remove": 0, "background_replace": 1, "background_blur": 2, "color_pop": 3, "spotlight": 4,
     "blur": 5, "pixelate": 6, "glow": 7, "emoji": 8, "captions": 9,
 }
-OBJECT_EFFECTS = set(STAGE) - {"captions"}
+OBJECT_EFFECTS = set(STAGE) - {"captions", "restyle"}
 
 _project_locks: dict[str, threading.Lock] = {}
 
@@ -63,7 +63,7 @@ class Project:
         if not (self.dir / "meta.json").exists():
             raise FileNotFoundError(pid)
         self.meta: dict[str, Any] = json.loads((self.dir / "meta.json").read_text())
-        self._tracks: dict[str, Tracks] = {}
+        self._tracks: dict[tuple[str, str], Tracks] = {}
 
     # ------------------------------------------------------------------ storage
     @classmethod
@@ -140,18 +140,34 @@ class Project:
             self.save()
         return self.meta["analysis"]
 
-    def tracks(self, concept: str, progress: Progress) -> Tracks:
+    def base(self) -> str:
+        """The video object effects are drawn on: "" = the source, else the active restyle video."""
+        op = next((o for o in self.meta["ops"] if o["effect"] == "restyle"), None)
+        return op["video"] if op else ""
+
+    def _base_file_id(self, base: str, progress: Progress) -> str:
+        if not base:
+            return self.ensure_uploaded(progress)
+        files = self.meta.setdefault("base_files", {})
+        if base not in files:
+            progress("Uploading the restyled video so SAM 3.1 can track it", None)
+            files[base] = meta_api.upload_file(self.dir / "assets" / base)
+            self.save()
+        return files[base]
+
+    def tracks(self, concept: str, progress: Progress, base: str = "") -> Tracks:
         concept = concept.strip().lower()
-        if concept in self._tracks:
-            return self._tracks[concept]
-        raw = self.dir / "sam" / f"{_slug(concept)}.txt"
+        if (base, concept) in self._tracks:
+            return self._tracks[(base, concept)]
+        prefix = f"{Path(base).stem}__" if base else ""
+        raw = self.dir / "sam" / f"{prefix}{_slug(concept)}.txt"
         info = self.info
-        lock = concept_lock(self.id, concept)
+        lock = concept_lock(self.id, prefix + concept)
         if not raw.exists() and lock.locked():
             progress(f"SAM 3.1 is already tracking “{concept}” in the background", None)
         with lock:  # one SAM call per concept, even with background prefetch running
             if not raw.exists():
-                file_id = self.ensure_uploaded(progress)
+                file_id = self._base_file_id(base, progress)
                 total = max(1, info.frames)
 
                 def on_frame(n: int) -> None:
@@ -164,7 +180,7 @@ class Project:
                 tmp.write_text(text)
                 tmp.replace(raw)
         tracks = load_tracks(raw, concept, info.width, info.height)
-        self._tracks[concept] = tracks
+        self._tracks[(base, concept)] = tracks
         return tracks
 
     def prefetch(self, concepts: list[str]) -> None:
@@ -221,6 +237,8 @@ class Project:
             resolved = self._resolve(op, progress, trace)
             if resolved is None:
                 continue
+            if effect == "restyle":  # one look at a time: a new restyle replaces the old one
+                self.meta["ops"] = [o for o in self.meta["ops"] if o["effect"] != "restyle"]
             self.meta["ops"].append(resolved)
             added.append(resolved)
             changed = True
@@ -264,6 +282,15 @@ class Project:
             "end": op.get("end_sec"),
         }
 
+        if effect == "restyle":
+            style = (op.get("style_prompt") or "").strip() or "anime illustration with clean cel shading"
+            resolved.update(target="", start=None, end=None, style=style)
+            resolved["video"], keys = self._restyle(style, progress)
+            resolved["label"] = f"Restyle · {style[:60]}"
+            trace.append(f"Muse Image restyled {keys} keyframes: “{style}”")
+            trace.append("Optical flow carried each keyframe along the clip's real motion")
+            return resolved
+
         if effect == "captions":
             captions = self._captions(progress)
             if not captions:
@@ -280,7 +307,10 @@ class Project:
             trace.append(f"No target for {effect}.")
             return None
         resolved["target"] = target
-        tracks = self.tracks(target, progress)
+        base = self.base()
+        resolved["base"] = base
+        resolved["plan"] = {k: v for k, v in op.items()}
+        tracks = self.tracks(target, progress, base)
         if not tracks.objects:
             trace.append(f"SAM 3.1 found no “{target}” in the clip.")
             return None
@@ -328,11 +358,13 @@ class Project:
 
     def _pick(self, tracks: Tracks, description: str, progress: Progress) -> dict[str, Any]:
         progress(f"Muse Spark is looking for {description.split('(')[0].strip()}", None)
-        sheet_path = self.dir / "assets" / f"sheet_{_slug(tracks.concept)}.jpg"
+        base = self.base()
+        prefix = f"{Path(base).stem}__" if base else ""
+        sheet_path = self.dir / "assets" / f"sheet_{prefix}{_slug(tracks.concept)}.jpg"
         if sheet_path.exists():
             sheet = sheet_path.read_bytes()
         else:
-            frames = self._frames_at({s.best_frame for s in tracks.objects.values()})
+            frames = self._frames_at({s.best_frame for s in tracks.objects.values()}, base)
             sheet = agent.contact_sheet(frames, tracks)
             sheet_path.write_bytes(sheet)
         return agent.pick_objects(description, tracks.concept, sheet, tracks.object_ids)
@@ -355,9 +387,10 @@ class Project:
         return label
 
     # ------------------------------------------------------------------ assets
-    def _frames_at(self, indices: set[int]) -> dict[int, np.ndarray]:
+    def _frames_at(self, indices: set[int], base: str = "") -> dict[int, np.ndarray]:
         out: dict[int, np.ndarray] = {}
-        for i, frame in enumerate(media.read_frames(self.source)):
+        video = self.dir / "assets" / base if base else self.source
+        for i, frame in enumerate(media.read_frames(video)):
             if i in indices:
                 out[i] = frame
             if len(out) == len(indices):
@@ -377,6 +410,21 @@ class Project:
             path.write_bytes(meta_api.generate_image(full_prompt, size=f"{info.width}x{info.height}"))
         return name
 
+    def _restyle(self, style: str, progress: Progress) -> tuple[str, int]:
+        info = self.info
+        key = hashlib.sha1(style.encode()).hexdigest()[:10]
+        name = f"restyle_{key}.mp4"
+        path = self.dir / "assets" / name
+        keys_dir = self.dir / "assets" / f"restyle_{key}"
+        if path.exists():
+            return name, len(list(keys_dir.glob("k*.png")))
+        restyle.check_budget()
+        keyframes = restyle.stylize_keyframes(self.source, info, style, keys_dir, progress)
+        if len(keyframes) < 2 and info.frames > 1:
+            raise RuntimeError("Muse Image couldn't restyle this clip. Try a different style.")
+        restyle.render_restyled(self.source, info, keyframes, path, progress)
+        return name, len(keyframes)
+
     def _load_background(self, name: str) -> np.ndarray:
         info = self.info
         img = cv2.imread(str(self.dir / "assets" / name))
@@ -387,7 +435,8 @@ class Project:
         return img[y0 : y0 + info.height, x0 : x0 + info.width]
 
     def _clean_plate(self, tracks: Tracks, ids: list[str] | None, progress: Progress) -> str:
-        key = hashlib.sha1(f"{tracks.concept}|{ids}".encode()).hexdigest()[:10]
+        base = self.base()
+        key = hashlib.sha1(f"{base}|{tracks.concept}|{ids}".encode()).hexdigest()[:10]
         name = f"plate_{key}.png"
         path = self.dir / "assets" / name
         if not path.exists():
@@ -396,7 +445,7 @@ class Project:
             step = max(1, info.frames // 48)
             frames, masks = [], []
             sel = set(ids) if ids else None
-            for i, frame in enumerate(media.read_frames(self.source)):
+            for i, frame in enumerate(media.read_frames(self.dir / "assets" / base if base else self.source)):
                 if i % step == 0:
                     frames.append(frame)
                     masks.append(tracks.mask(i, sel))
@@ -433,19 +482,37 @@ class Project:
         return captions
 
     # ------------------------------------------------------------------ render
+    def _rebase(self, progress: Progress) -> None:
+        """Object effects must follow what is on screen: re-resolve them when the restyle changes."""
+        base = self.base()
+        updated = []
+        for op in self.meta["ops"]:
+            if op["effect"] in OBJECT_EFFECTS and op.get("base", "") != base and op.get("plan"):
+                fresh = self._resolve(op["plan"], progress, [])
+                if fresh is None:
+                    continue  # the object can't be found in the new look: drop the effect
+                fresh["id"] = op["id"]
+                op = fresh
+            updated.append(op)
+        self.meta["ops"] = updated
+
     def render(self, progress: Progress) -> None:
         info = self.info
+        self._rebase(progress)
         ops = sorted(self.meta["ops"], key=lambda o: STAGE.get(o["effect"], 50))
         if not ops:
             self.meta["render"] = None
             self.save()
             return
 
-        tracks = {o["target"]: self.tracks(o["target"], progress) for o in ops if o["effect"] in OBJECT_EFFECTS}
+        tracks = {o["target"]: self.tracks(o["target"], progress, o.get("base", "")) for o in ops if o["effect"] in OBJECT_EFFECTS}
         backgrounds = {o["id"]: self._load_background(o["background"]) for o in ops if o.get("background")}
         plates = {o["id"]: cv2.imread(str(self.dir / "assets" / o["plate"])) for o in ops if o.get("plate")}
         sprites = {o["id"]: effects.emoji_sprite(o["emoji"]) for o in ops if o["effect"] == "emoji"}
         caption_cache: dict[tuple[str, int], np.ndarray] = {}
+
+        base = next((o for o in ops if o["effect"] == "restyle"), None)
+        base_video = self.dir / "assets" / base["video"] if base else self.source
 
         version = self.meta.get("render_version", 0) + 1
         name = f"v{version}.mp4"
@@ -453,9 +520,11 @@ class Project:
         writer = media.VideoWriter(out_path, info, self.source if info.has_audio else None)
         total = max(1, info.frames)
         try:
-            for index, frame in enumerate(media.read_frames(self.source)):
+            for index, frame in enumerate(media.read_frames(base_video)):
                 t = index / info.fps
                 for op in ops:
+                    if op["effect"] == "restyle":
+                        continue
                     if op.get("start") is not None and t < op["start"]:
                         continue
                     if op.get("end") is not None and t > op["end"]:

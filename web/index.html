@@ -38,7 +38,7 @@
     <section class="hero">
       <span class="eyebrow"><i data-icon="sparkles"></i>Built with Meta Muse Spark &amp; SAM 3.1</span>
       <h1>Edit video by describing it.</h1>
-      <p class="lede">Blur bystanders, light up your subject, swap the scene, add captions. SayCut tracks every object in every frame, so you only have to say what you want.</p>
+      <p class="lede">Blur bystanders, light up your subject, turn the whole clip into anime or claymation, add captions. SayCut tracks every object in every frame, so you only have to say what you want.</p>
 
       <label id="dropzone" class="dropzone" tabindex="0">
         <input id="file" type="file" accept="video/mp4,video/quicktime,video/*" hidden />
@@ -71,10 +71,10 @@
         <code>“Make the dog glow pink”</code>
       </article>
       <article class="feature">
-        <span class="feature-icon"><i data-icon="mountain"></i></span>
-        <h3>New scenes</h3>
-        <p>Replace the background with a generated scene, or erase objects entirely.</p>
-        <code>“Put me on a beach at sunset”</code>
+        <span class="feature-icon"><i data-icon="wand"></i></span>
+        <h3>New worlds</h3>
+        <p>Restyle the whole clip as anime, claymation or a cyberpunk city, with the original motion intact. Or just swap the background.</p>
+        <code>“Make me an anime girl on a beach”</code>
       </article>
       <article class="feature">
         <span class="feature-icon"><i data-icon="captions"></i></span>
@@ -150,6 +150,8 @@
       <div class="suggest-wrap">
         <span class="suggest-label">Suggestions</span>
         <div id="suggestions" class="suggestions"></div>
+        <span class="suggest-label suggest-label-gap"><i data-icon="wand"></i>Transform the whole video</span>
+        <div id="styles" class="styles"></div>
       </div>
 
       <form id="composer" class="composer">

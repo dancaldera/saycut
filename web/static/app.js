@@ -20,6 +20,7 @@ const ICONS = {
   check: '<path d="M20 6 9 17l-5-5"/>',
   shield: '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>',
+  wand: '<path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72"/><path d="m14 7 3 3"/><path d="M5 6v4"/><path d="M19 14v4"/><path d="M10 2v2"/><path d="M7 8H3"/><path d="M21 16h-4"/><path d="M11 3H9"/>',
   mountain: '<path d="m8 3 4 8 5-5 5 15H2L8 3z"/>',
   captions: '<rect width="18" height="14" x="3" y="5" rx="2" ry="2"/><path d="M7 15h4M15 15h2M7 11h2M13 11h4"/>',
   film: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M7 3v18"/><path d="M3 7.5h4"/><path d="M3 12h18"/><path d="M3 16.5h4"/><path d="M17 3v18"/><path d="M17 7.5h4"/><path d="M17 16.5h4"/>',
@@ -45,8 +46,20 @@ function hydrateIcons(root = document) {
 
 const EFFECT_ICON = {
   blur: "droplet", pixelate: "grid", glow: "sun", color_pop: "palette", spotlight: "focus",
-  background_blur: "aperture", background_replace: "mountain", remove: "eraser", emoji: "smile", captions: "captions",
+  background_blur: "aperture", background_replace: "mountain", remove: "eraser", emoji: "smile", captions: "captions", restyle: "wand",
 };
+
+// One-tap whole-video transformations (Muse Image keyframes + optical-flow animation).
+const STYLES = [
+  ["🌸", "Anime", "Turn this into an anime, cel-shaded with vivid colors"],
+  ["🧸", "3D cartoon", "Make it a 3D animated movie scene, soft lighting, cute characters"],
+  ["🏺", "Claymation", "Turn it into stop-motion claymation"],
+  ["🌃", "Cyberpunk", "Make it a neon cyberpunk city at night"],
+  ["🎨", "Van Gogh", "Paint it like a Van Gogh oil painting with swirling brushstrokes"],
+  ["💥", "Comic book", "Make it a comic book with bold ink lines and halftone dots"],
+  ["❄️", "Snow day", "Make it a snowy winter wonderland"],
+  ["🧱", "Toy bricks", "Rebuild everything out of plastic toy bricks"],
+];
 
 // Which Meta model a pipeline step belongs to.
 const MODELS = [
@@ -55,7 +68,7 @@ const MODELS = [
   [/muse image/i, "Muse Image", "image"],
   [/voice transcribe/i, "Voice", "voice"],
   [/upload/i, "Upload", "render"],
-  [/render|reconstruct/i, "Render", "render"],
+  [/render|reconstruct|animating|optical flow/i, "Render", "render"],
 ];
 function modelOf(text) {
   for (const [re, label, key] of MODELS) if (re.test(text)) return { label, key };
@@ -150,7 +163,7 @@ function setBusy(on) {
   $("frame").classList.toggle("is-busy", on);
   ["mic", "undo", "cover-btn"].forEach((id) => ($(id).disabled = on));
   $("send").disabled = on || !$("prompt").value.trim();
-  document.querySelectorAll(".suggestions button, .layer .icon-btn").forEach((b) => (b.disabled = on));
+  document.querySelectorAll(".suggestions button, .styles button, .layer .icon-btn").forEach((b) => (b.disabled = on));
 }
 
 function setStatus(stage, progress) {
@@ -225,6 +238,20 @@ function showProject(p) {
     b.disabled = state.busy;
     b.onclick = () => sendCommand(s);
     sug.appendChild(b);
+  });
+
+  // Whole-video transformations
+  const styles = $("styles");
+  styles.innerHTML = "";
+  STYLES.forEach(([emoji, label, cmd]) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.innerHTML = `<span class="style-emoji">${emoji}</span><span></span>`;
+    b.lastChild.textContent = label;
+    b.title = cmd;
+    b.disabled = state.busy || !a;
+    b.onclick = () => sendCommand(cmd);
+    styles.appendChild(b);
   });
 
   // Layers
