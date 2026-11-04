@@ -33,7 +33,8 @@ from . import config, media, meta_api
 Progress = Callable[[str, float | None], None]
 
 KEY_SPACING_SEC = 0.6
-MAX_KEYFRAMES = 28
+MAX_KEYFRAMES = 32
+MOTION_WEIGHT = 0.12
 FLOW_LONG_SIDE = 480
 PARALLEL = 8
 
@@ -54,12 +55,37 @@ def check_budget() -> None:
         _budget["count"] += 1
 
 
-def keyframe_indices(frames: int, fps: float) -> list[int]:
+def motion_profile(source: Path, info: media.VideoInfo) -> np.ndarray:
+    """Per-frame motion (90th-percentile optical-flow magnitude, in FLOW_LONG_SIDE pixels)."""
+    flow = _Flow(info.width, info.height)
+    motion, prev = [0.0], None
+    for frame in media.read_frames(source):
+        g = flow.gray(frame)
+        if prev is not None:
+            f = flow.dis.calc(prev, g, None)
+            motion.append(float(np.percentile(np.hypot(f[..., 0], f[..., 1]), 90)))
+        prev = g
+    return np.array(motion[: max(1, info.frames)])
+
+
+def keyframe_indices(frames: int, fps: float, motion: np.ndarray | None = None) -> list[int]:
+    """Keyframes ~every KEY_SPACING_SEC, packed closer together where the clip moves fast.
+
+    Each frame costs 1 + MOTION_WEIGHT x its motion; keyframes split the cumulative cost
+    evenly, so a fast arm swing gets several keyframes and a still shot gets few.
+    """
     if frames <= 1:
         return [0]
-    count = min(MAX_KEYFRAMES, max(2, math.ceil(frames / (fps * KEY_SPACING_SEC)) + 1))
-    idx = sorted({round(i * (frames - 1) / (count - 1)) for i in range(count)})
-    return idx
+    cost = np.ones(frames)
+    if motion is not None and len(motion):
+        m = np.zeros(frames)
+        m[: min(frames, len(motion))] = motion[:frames]
+        cost += MOTION_WEIGHT * m
+    count = min(MAX_KEYFRAMES, max(2, math.ceil(cost.sum() / (fps * KEY_SPACING_SEC)) + 1))
+    cum = np.concatenate([[0.0], np.cumsum(cost[1:])])
+    targets = np.linspace(0, cum[-1], count)
+    idx = sorted({int(np.searchsorted(cum, t)) for t in targets} | {0, frames - 1})
+    return [min(frames - 1, i) for i in idx]
 
 
 def _png(frame: np.ndarray) -> bytes:
@@ -119,7 +145,8 @@ def stylize_keyframes(
 ) -> dict[int, Path]:
     """Return {frame_index: stylised png path}. Cached per style in out_dir."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    indices = keyframe_indices(info.frames, info.fps)
+    progress("Measuring motion to place keyframes", 0.01)
+    indices = keyframe_indices(info.frames, info.fps, motion_profile(source, info))
     wanted = set(indices)
     frames: dict[int, np.ndarray] = {}
     for i, frame in enumerate(media.read_frames(source)):
@@ -182,6 +209,12 @@ class _Flow:
         flow = self.dis.calc(g_to, g_from, None)  # g_to(x) ~ g_from(x + flow(x))
         pos = self.grid + flow
         return cv2.remap(coords, pos[..., 0], pos[..., 1], cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+
+    def confidence(self, g_key: np.ndarray, coords: np.ndarray, g_now: np.ndarray) -> np.ndarray:
+        """Per-pixel trust in a keyframe's propagated motion (low res, 0..1)."""
+        pred = cv2.remap(g_key, coords[..., 0], coords[..., 1], cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+        err = cv2.GaussianBlur(cv2.absdiff(pred, g_now).astype(np.float32), (0, 0), 3)
+        return np.exp(-err / 14.0)
 
     def warp(self, key: np.ndarray, coords: np.ndarray) -> np.ndarray:
         sx, sy = self.w / self.sw, self.h / self.sh
@@ -250,11 +283,22 @@ def render_restyled(
                 if a is not None and j == 0:
                     continue  # keyframe `a` was written by the previous segment
                 if fwd[j] is not None and bwd[j] is not None:
-                    # Cross-fade only through the middle of the interval: each keyframe
-                    # owns the frames near it, which keeps ghosting short.
+                    # Cross-fade through the middle of the interval (each keyframe owns the
+                    # frames near it), but per pixel prefer whichever keyframe's motion is
+                    # right: warp the *source* keyframes the same way and measure how well
+                    # they predict the current source frame. Hands crossing faces and other
+                    # occlusions then come from the side that actually saw them.
                     t = min(1.0, max(0.0, ((absolute - a) / (b - a) - 0.3) / 0.4))
                     t = t * t * (3 - 2 * t)
-                    out = cv2.addWeighted(flow.warp(images[a], fwd[j]), 1 - t, flow.warp(images[b], bwd[j]), t, 0)
+                    ca = flow.confidence(grays[0], fwd[j], grays[j])
+                    cb = flow.confidence(grays[ib], bwd[j], grays[j])
+                    wa = (1 - t + 0.1) * ca
+                    wb = (t + 0.1) * cb
+                    wt = wb / np.maximum(wa + wb, 1e-6)
+                    wt = cv2.resize(wt, (w, h), interpolation=cv2.INTER_LINEAR)[..., None]
+                    fa = flow.warp(images[a], fwd[j]).astype(np.float32)
+                    fb = flow.warp(images[b], bwd[j]).astype(np.float32)
+                    out = np.clip(fa + (fb - fa) * wt, 0, 255).astype(np.uint8)
                 elif fwd[j] is not None:
                     out = flow.warp(images[a], fwd[j])
                 else:
