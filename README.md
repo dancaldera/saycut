@@ -48,10 +48,12 @@ Built for the **Meta Global AI Developer Hackathon** with four Meta models worki
 1. Muse Spark writes a style prompt from the request (“anime illustration with clean cel shading; she is an anime girl on a sunny tropical beach”).
 2. Muse Image transforms the first frame. That frame becomes the **style anchor**.
 3. Keyframes about every 0.6 s are transformed **in parallel**, each with the anchor passed as a second reference image. Characters, palette and setting stay consistent across the clip, while pose and framing follow the real frame.
-4. Between keyframes, each stylised keyframe is **carried along the clip's real motion** with dense DIS optical flow. Coordinate maps are composed frame to frame, so each output pixel is resampled once. Frames are warped forward from the previous keyframe and backward from the next, then cross-faded through the middle of each interval. The output moves frame for frame like the original.
-5. Every other edit stacks on top. When a restyle is active, SAM 3.1 tracks objects **on the restyled video**, so “now make her glow pink” hugs the anime character. Swapping or undoing the restyle re-resolves those edits automatically.
+4. Keyframes are **motion-adaptive**: a first optical-flow pass measures how much each frame moves, and keyframes pack closer together around fast gestures.
+5. Between keyframes, each stylised keyframe is **carried along the clip's real motion** with dense DIS optical flow. Coordinate maps are composed frame to frame, so each output pixel is resampled once. The handover from one keyframe's drawing to the next happens at the frame where both sides' propagated motion best predicts the real video, over 1–2 frames. That reads like limited animation, not a ghosting dissolve.
+6. **Lip sync.** Flow can move a drawn mouth but can't open one. For clips with speech, Muse Image also draws a closed-mouth and an open-mouth edit of each keyframe, and their difference locates the mouth. The audio envelope, gated by Muse Voice Transcribe speech turns, opens the mouth on syllable peaks, like anime lip flaps.
+7. Every other edit stacks on top. When a restyle is active, SAM 3.1 tracks objects **on the restyled video**, so “now make her glow pink” hugs the anime character. Swapping or undoing the restyle re-resolves those edits automatically.
 
-An 8-second clip takes about a minute (15 keyframes, roughly $0.15 of Muse Image).
+A 10-second clip takes about 1–3 minutes: roughly 15–30 keyframes, plus two mouth edits per keyframe when someone is speaking ($0.15–$0.90 of Muse Image).
 
 **Selection** is what makes this more than a filter app. SAM 3.1 gives every object a stable ID, so:
 - “everyone **except me**” → the main subject (picked by Muse Spark vision) is excluded from the effect

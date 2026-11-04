@@ -285,10 +285,12 @@ class Project:
         if effect == "restyle":
             style = (op.get("style_prompt") or "").strip() or "anime illustration with clean cel shading"
             resolved.update(target="", start=None, end=None, style=style)
-            resolved["video"], keys = self._restyle(style, progress)
+            resolved["video"], keys, mouths = self._restyle(style, progress)
             resolved["label"] = f"Restyle · {style[:60]}"
             trace.append(f"Muse Image restyled {keys} keyframes: “{style}”")
             trace.append("Optical flow carried each keyframe along the clip's real motion")
+            if mouths:
+                trace.append(f"Muse Image drew talking mouths for {mouths} keyframes; Voice Transcribe + the audio drive the lip flaps")
             return resolved
 
         if effect == "captions":
@@ -410,20 +412,39 @@ class Project:
             path.write_bytes(meta_api.generate_image(full_prompt, size=f"{info.width}x{info.height}"))
         return name
 
-    def _restyle(self, style: str, progress: Progress) -> tuple[str, int]:
+    def _restyle(self, style: str, progress: Progress) -> tuple[str, int, int]:
         info = self.info
         key = hashlib.sha1(style.encode()).hexdigest()[:10]
         name = f"restyle_{key}.mp4"
         path = self.dir / "assets" / name
         keys_dir = self.dir / "assets" / f"restyle_{key}"
         if path.exists():
-            return name, len(list(keys_dir.glob("k*.png")))
+            keys = list(keys_dir.glob("k[0-9][0-9][0-9][0-9][0-9].png"))
+            return name, len(keys), len(list(keys_dir.glob("k*_open.png")))
         restyle.check_budget()
         keyframes = restyle.stylize_keyframes(self.source, info, style, keys_dir, progress)
         if len(keyframes) < 2 and info.frames > 1:
             raise RuntimeError("Muse Image couldn't restyle this clip. Try a different style.")
-        restyle.render_restyled(self.source, info, keyframes, path, progress)
-        return name, len(keyframes)
+
+        # Lip flaps for clips with speech: Voice Transcribe turns gate the audio envelope.
+        mouths, levels = {}, None
+        if info.has_audio:
+            try:
+                ranges = [(c["start"], c["end"]) for c in self._captions(progress)]
+                levels = restyle.speech_levels(self.source, info, ranges)
+                if levels.any():
+                    keys = sorted(keyframes)
+                    wanted = []
+                    for n, k in enumerate(keys):
+                        lo = (keys[n - 1] + k) // 2 if n else 0
+                        hi = (k + keys[n + 1]) // 2 if n + 1 < len(keys) else info.frames
+                        if levels[lo : hi + 1].any():
+                            wanted.append(k)
+                    mouths = restyle.mouth_variants(keyframes, wanted, f"{info.width}x{info.height}", progress)
+            except Exception as exc:  # noqa: BLE001 - restyle still works without lip flaps
+                print(f"lip flaps skipped: {exc}")
+        restyle.render_restyled(self.source, info, keyframes, path, progress, mouths, levels)
+        return name, len(keyframes), len(mouths)
 
     def _load_background(self, name: str) -> np.ndarray:
         info = self.info

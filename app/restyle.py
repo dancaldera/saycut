@@ -12,6 +12,11 @@ There is no video-to-video model in the Model API, so SayCut builds one:
    image is only resampled once), forward from the previous keyframe and backward from
    the next, and the two are cross-faded. The result moves exactly like the original
    clip, frame for frame, in the new style.
+5. Lip flaps. Optical flow can move a drawn mouth but can't open one, so for clips with
+   speech, Muse Image also draws a closed-mouth and an open-mouth version of each keyframe
+   (an edit of the stylised keyframe that changes only the mouth). Their difference locates
+   the mouth. The speech audio (gated by Voice Transcribe turns) picks open or closed for
+   every frame, peaking on syllables, like anime lip flaps.
 """
 
 from __future__ import annotations
@@ -19,6 +24,7 @@ from __future__ import annotations
 import base64
 import math
 import os
+import subprocess
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -86,6 +92,119 @@ def keyframe_indices(frames: int, fps: float, motion: np.ndarray | None = None) 
     targets = np.linspace(0, cum[-1], count)
     idx = sorted({int(np.searchsorted(cum, t)) for t in targets} | {0, frames - 1})
     return [min(frames - 1, i) for i in idx]
+
+
+def speech_levels(source: Path, info: media.VideoInfo, ranges: list[tuple[float, float]]) -> np.ndarray:
+    """Per-frame mouth state from the audio: 1 = open, 0 = closed. Open on syllable peaks."""
+    frames = max(1, info.frames)
+    levels = np.zeros(frames, np.uint8)
+    if not ranges or not info.has_audio:
+        return levels
+    rate = 16000
+    pcm = subprocess.run(
+        ["ffmpeg", "-v", "error", "-i", str(source), "-vn", "-ac", "1", "-ar", str(rate), "-f", "s16le", "-"],
+        capture_output=True, check=False,
+    ).stdout
+    audio = np.frombuffer(pcm, np.int16).astype(np.float32) / 32768.0
+    if not audio.size:
+        return levels
+    t = np.arange(frames) / info.fps
+    half = int(rate * 0.03)
+    centers = (t * rate).astype(int)
+    rms = np.array([np.sqrt(np.mean(audio[max(0, c - half): c + half] ** 2) + 1e-12) for c in centers])
+    db = 20 * np.log10(rms + 1e-6)
+    speech = np.zeros(frames, bool)
+    for start, end in ranges:
+        speech |= (t >= start - 0.05) & (t <= end + 0.05)
+    if speech.sum() < 3:
+        return levels
+    lo, hi = np.percentile(db[speech], 20), np.percentile(db[speech], 95)
+    x = np.clip((db - lo) / max(1e-3, hi - lo), 0, 1)
+    x = np.convolve(x, [0.25, 0.5, 0.25], mode="same")
+    # Open around local energy peaks (syllable nuclei), closed in the valleys between them.
+    for i in range(1, frames - 1):
+        if speech[i] and x[i] >= 0.35 and x[i] >= x[i - 1] and x[i] >= x[i + 1]:
+            levels[max(0, i - 1): i + 2] = 1
+    levels[x < 0.2] = 0
+    levels[~speech] = 0
+    return levels
+
+
+MOUTH_PROMPTS = {
+    "closed": "Edit only the mouth of the main person in this image: mouth closed, lips gently together.",
+    "open": "Edit only the mouth of the main person in this image: mouth open mid-word as if talking, a natural open talking mouth.",
+}
+MOUTH_KEEP = (
+    " Keep everything else exactly identical: same pose, hair, face, framing, background, colors and line art. "
+    "Do not move, crop or resize anything."
+)
+
+
+def _align_to(img: np.ndarray, ref: np.ndarray) -> np.ndarray:
+    """Undo any small global shift Muse Image introduced in an edit."""
+    a = cv2.cvtColor(ref, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    b = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    (dx, dy), _ = cv2.phaseCorrelate(a, b)
+    if abs(dx) < 0.5 and abs(dy) < 0.5 or abs(dx) > ref.shape[1] * 0.05 or abs(dy) > ref.shape[0] * 0.05:
+        return img
+    m = np.float32([[1, 0, -dx], [0, 1, -dy]])
+    return cv2.warpAffine(img, m, (ref.shape[1], ref.shape[0]), borderMode=cv2.BORDER_REFLECT)
+
+
+def mouth_patch(key: np.ndarray, closed: np.ndarray, opened: np.ndarray):
+    """Locate the mouth from where the two variants differ. Returns (mask, closed, open) or None."""
+    h, w = key.shape[:2]
+    closed, opened = _align_to(closed, key), _align_to(opened, key)
+    diff = cv2.absdiff(closed, opened).max(axis=2).astype(np.float32)
+    broad = cv2.GaussianBlur(diff, (0, 0), max(2.0, w * 0.02))
+    _, peak, _, (px, py) = cv2.minMaxLoc(broad)
+    if peak < 4:
+        return None
+    fine = cv2.GaussianBlur(diff, (0, 0), max(1.0, w * 0.006))
+    blob = (fine >= 0.35 * fine[py, px]).astype(np.uint8)
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(blob)
+    lab = labels[py, px]
+    if lab == 0:
+        return None
+    x, y, bw, bh = stats[lab, :4]
+    if bw * bh > 0.03 * w * h:
+        return None
+    mask = np.zeros((h, w), np.float32)
+    center = (int(x + bw / 2), int(y + bh / 2))
+    axes = (int(bw * 0.5 * 1.45) + 2, int(bh * 0.5 * 1.6) + 2)
+    cv2.ellipse(mask, center, axes, 0, 0, 360, 1.0, -1)
+    mask = cv2.GaussianBlur(mask, (0, 0), max(1.5, min(axes) * 0.35))
+    return mask, closed, opened
+
+
+def mouth_variants(
+    keyframes: dict[int, Path], wanted: list[int], size: str, progress: Progress
+) -> dict[int, dict[str, Path]]:
+    """Closed/open-mouth edits of the stylised keyframes (cached next to them)."""
+    jobs = []
+    out: dict[int, dict[str, Path]] = {}
+    for i in wanted:
+        for state in MOUTH_PROMPTS:
+            path = keyframes[i].with_name(f"{keyframes[i].stem}_{state}.png")
+            out.setdefault(i, {})[state] = path
+            if not path.exists():
+                jobs.append((i, state, path))
+    done = 0
+
+    def work(job):
+        i, state, path = job
+        path.write_bytes(_edit(MOUTH_PROMPTS[state] + MOUTH_KEEP, [keyframes[i].read_bytes()], size))
+
+    with ThreadPoolExecutor(PARALLEL) as pool:
+        futures = [pool.submit(work, j) for j in jobs]
+        for fut in as_completed(futures):
+            try:
+                fut.result()
+            except Exception as exc:  # noqa: BLE001 - a keyframe without lip flaps is fine
+                print(f"restyle mouth: {exc}")
+            done += 1
+            progress(f"Muse Image is drawing lip-sync mouths {done}/{len(jobs)}", None)
+    return {i: v for i, v in out.items() if all(p.exists() for p in v.values())}
 
 
 def _png(frame: np.ndarray) -> bytes:
@@ -224,13 +343,41 @@ class _Flow:
         return cv2.remap(key, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
 
 
+def _lip_flap(out, use_b, a, b, fwd, bwd, absolute, patches, levels, flow):
+    """Paste the open or closed mouth of the keyframe this frame is drawn from, moved with the face."""
+    sides = [(b, bwd), (a, fwd)] if use_b else [(a, fwd), (b, bwd)]
+    picked = next(((k, c) for k, c in sides if k is not None and c is not None and k in patches), None)
+    if picked is None:
+        return out
+    k, coords = picked
+    mask, closed, opened = patches[k]
+    state = opened if levels is not None and absolute < len(levels) and levels[absolute] else closed
+    m = flow.warp(mask, coords)[..., None]
+    v = flow.warp(state, coords).astype(np.float32)
+    return np.clip(out.astype(np.float32) * (1 - m) + v * m, 0, 255).astype(np.uint8)
+
+
 def render_restyled(
-    source: Path, info: media.VideoInfo, keyframes: dict[int, Path], dst: Path, progress: Progress
+    source: Path,
+    info: media.VideoInfo,
+    keyframes: dict[int, Path],
+    dst: Path,
+    progress: Progress,
+    mouths: dict[int, dict[str, Path]] | None = None,
+    levels: np.ndarray | None = None,
 ) -> None:
     """Write the restyled video (no audio) to dst."""
     w, h = info.width, info.height
     keys = sorted(keyframes)
     images = {i: _fit(cv2.imread(str(keyframes[i])), w, h) for i in keys}
+    patches = {}
+    for i, paths in (mouths or {}).items():
+        if i in images:
+            found = mouth_patch(
+                images[i], _fit(cv2.imread(str(paths["closed"])), w, h), _fit(cv2.imread(str(paths["open"])), w, h)
+            )
+            if found is not None:
+                patches[i] = found
     flow = _Flow(w, h)
     total = max(1, info.frames)
     tmp = dst.with_suffix(".tmp.mp4")
@@ -278,31 +425,39 @@ def render_restyled(
                 for j in range(ib - 1, -1, -1):
                     coords = flow.step(coords, grays[j], grays[j + 1])
                     bwd[j] = coords
+            # Where to hand over from keyframe a's drawing to keyframe b's: the frame that
+            # maximises how well each side's propagated motion predicts the real video
+            # (warp the *source* keyframes the same way and compare). Two keyframes are
+            # never drawn identically, so a long dissolve shows two overlapping faces;
+            # a 1-2 frame switch at the best moment reads like limited animation instead.
+            switch = None
+            if a is not None and b is not None and 0 <= b - offset < n:
+                qa = [float(flow.confidence(grays[0], fwd[j], grays[j]).mean()) for j in range(n)]
+                qb = [float(flow.confidence(grays[ib], bwd[j], grays[j]).mean()) for j in range(n)]
+                prefix_a = np.concatenate([[0.0], np.cumsum(qa)])
+                suffix_b = np.concatenate([np.cumsum(qb[::-1])[::-1], [0.0]])
+                bias = np.array([-abs(j - (n - 1) / 2) * 0.004 for j in range(n + 1)])  # prefer the middle
+                switch = int(np.argmax(prefix_a + suffix_b + bias))
+                switch = min(max(switch, 1), n - 1)
             for j in range(n):
                 absolute = offset + j
                 if a is not None and j == 0:
                     continue  # keyframe `a` was written by the previous segment
-                if fwd[j] is not None and bwd[j] is not None:
-                    # Cross-fade through the middle of the interval (each keyframe owns the
-                    # frames near it), but per pixel prefer whichever keyframe's motion is
-                    # right: warp the *source* keyframes the same way and measure how well
-                    # they predict the current source frame. Hands crossing faces and other
-                    # occlusions then come from the side that actually saw them.
-                    t = min(1.0, max(0.0, ((absolute - a) / (b - a) - 0.3) / 0.4))
-                    t = t * t * (3 - 2 * t)
-                    ca = flow.confidence(grays[0], fwd[j], grays[j])
-                    cb = flow.confidence(grays[ib], bwd[j], grays[j])
-                    wa = (1 - t + 0.1) * ca
-                    wb = (t + 0.1) * cb
-                    wt = wb / np.maximum(wa + wb, 1e-6)
-                    wt = cv2.resize(wt, (w, h), interpolation=cv2.INTER_LINEAR)[..., None]
-                    fa = flow.warp(images[a], fwd[j]).astype(np.float32)
-                    fb = flow.warp(images[b], bwd[j]).astype(np.float32)
-                    out = np.clip(fa + (fb - fa) * wt, 0, 255).astype(np.uint8)
+                if fwd[j] is not None and bwd[j] is not None and switch is not None:
+                    t = min(1.0, max(0.0, (j - switch + 1.5) / 2.0))  # 0 .. 1 over ~2 frames
+                    if t <= 0.0:
+                        out = flow.warp(images[a], fwd[j])
+                    elif t >= 1.0:
+                        out = flow.warp(images[b], bwd[j])
+                    else:
+                        out = cv2.addWeighted(flow.warp(images[a], fwd[j]), 1 - t, flow.warp(images[b], bwd[j]), t, 0)
                 elif fwd[j] is not None:
                     out = flow.warp(images[a], fwd[j])
                 else:
                     out = flow.warp(images[b], bwd[j])
+                if patches:
+                    use_b = fwd[j] is None or (switch is not None and bwd[j] is not None and j >= switch)
+                    out = _lip_flap(out, use_b, a, b, fwd[j], bwd[j], absolute, patches, levels, flow)
                 writer.write(out)
                 index += 1
                 if index % 10 == 0:
